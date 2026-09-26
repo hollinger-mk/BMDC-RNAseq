@@ -1,0 +1,105 @@
+#NOTE: Input data for this analysis is a pre-generated DEG table from Novogene. Columns are as follows: gene_name; log2FoldChange; pvalue; padj. This file is sufficient for visualization and identifying DEGs.
+#Code adapted from NGS101 tutorial 
+#(https://ngs101.com/how-to-analyze-rnaseq-data-for-absolute-beginners-part-4-a-complete-guide-to-creating-publication-ready-figures/#Why_Use_R_for_RNA-seq_Visualization). 
+
+#Install necessary packages
+  if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+ 
+  BiocManager::install(c("sva", "edgeR", "limma", "Biobase", "biomaRt", 
+                       "clusterProfiler", "EnhancedVolcano", "org.Hs.eg.db", 
+                       "org.Mm.eg.db", "org.Rn.eg.db"))
+ 
+  install.packages(c("data.table", "readxl", "stringr", "ggplot2", "ggrepel", 
+                   "ggfortify", "ggprism", "pheatmap", "VennDiagram", 
+                   "corrplot", "Hmisc", "stats", "tidyverse", "xlsx"))
+
+# Load required packages
+  library(data.table)    # For efficient data handling
+  library(tidyverse)    # For versatile data manipulation
+  library(ggplot2)       # For creating custom plots
+  library(ggrepel)       # For non-overlapping text labels
+  library(ggfortify)     # For statistical visualizations
+  library(ggprism)       # For publication-ready styling
+  library(pheatmap)      # For creating heatmaps
+  library(EnhancedVolcano) # For volcano plots
+
+#Set working directory
+  setwd("C:/Users/Maile Hollinger/OneDrive/Desktop/BMDC RNA-seq")
+
+#Import gene counts
+  deg_tbl <- fread("WT_EPSvsWT_PBS_deg_proteincoding.txt")
+
+# Set significance thresholds
+  FC_threshold <- 2
+  P_threshold <- 0.05
+
+# Prepare data
+  deg_tbl$neg_log10_adj.P.Val <- -log10(deg_tbl$padj)
+  deg_tbl$significance <- ifelse(
+    deg_tbl$padj < P_threshold & abs(deg_tbl$log2FoldChange) > log2(FC_threshold),
+    ifelse(deg_tbl$log2FoldChange > 0, "Upregulated", "Downregulated"),
+    "Non-Significant"
+  )
+
+# Export new table with transformed p value and labels "Upregulated", "Downregulated", and "Significant" (EXTREMELY useful for making gene lists to pass to Metascape!)
+  write_excel_csv(deg_tbl_trim, "EPSvsPBS_BMDC_sortedDEG.txt")
+
+# Create color scheme for different gene categories
+  keyvals.colour_rd <- ifelse(
+    (deg_tbl$log2FoldChange < -log2(FC_threshold) & deg_tbl$padj < P_threshold), 'blue',
+      ifelse((deg_tbl$log2FoldChange > log2(FC_threshold) & deg_tbl$padj < P_threshold), 'red', 'grey30')
+  )
+
+# Add informative labels showing number of genes in each category
+  names(keyvals.colour_rd)[keyvals.colour_rd == 'blue'] <- paste0(
+    "Downregulated (n=",
+    sum(deg_tbl$log2FoldChange < -log2(FC_threshold) & deg_tbl$padj < P_threshold),
+    ")"
+  )
+  names(keyvals.colour_rd)[keyvals.colour_rd == 'red'] <- paste0(
+    "Upregulated (n=",
+    sum(deg_tbl$log2FoldChange > log2(FC_threshold) & deg_tbl$padj < P_threshold),
+    ")"
+    )
+  names(keyvals.colour_rd)[keyvals.colour_rd == 'grey30'] <- 'Non-significant'
+
+# Select top genes to label; this is for the top 15
+  genes_to_label <- deg_tbl[order(deg_tbl$padj)]$gene_name[1:15]
+
+# Generate custom volcano plot
+  custom_volcano <- ggplot(deg_tbl, aes(x = log2FoldChange, y = neg_log10_adj.P.Val)) +
+    geom_point(aes(color = significance), alpha = 0.8, size = 3) +
+    scale_color_manual(
+    values = c("Upregulated" = "red", "Downregulated" = "blue", "Non-Significant" = "gray80")
+    ) +
+    geom_vline(xintercept = c(-log2(FC_threshold), log2(FC_threshold)),
+      linetype = "dashed", color = "gray50") +
+    geom_hline(yintercept = -log10(P_threshold),
+      linetype = "dashed", color = "gray50") +
+    geom_text_repel(
+      data = subset(deg_tbl_trim, gene_name %in% genes_to_label),
+      aes(label = gene_name),
+      size = 4,
+      box.padding = 0.5,
+      max.overlaps = Inf
+    ) +
+    labs(
+      x = expression(log[2]~"Fold Change"),
+      y = expression(-log[10]~"adjusted p-value"),
+      color = "Differential Expression"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "right",
+      panel.grid.minor = element_blank(),
+      text = element_text(size = 12),
+      axis.text = element_text(size = 10)
+      )
+  # Save your plot
+    ggsave(
+    "EPS vs PBS BMDC protein coding only.png",
+    custom_volcano,
+    device = "png",
+    units = "cm",
+    )
