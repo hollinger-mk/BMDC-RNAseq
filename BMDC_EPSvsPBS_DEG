@@ -1,0 +1,142 @@
+---
+title: "BMDC_EPSvsPBS_DEG"
+output: html_document
+date: "2026-09-26"
+---
+All code is adapted from NGS101 tutorials. The normalized data is generated differently from data     provided by Novogene, so I will be re-running the DEG analysis. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install packages (only needs to be done once)
+
+```{r package installation}
+  if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+  BiocManager::install(c("sva", "edgeR", "limma", "Biobase", "biomaRt", 
+                         "clusterProfiler", "EnhancedVolcano", "org.Hs.eg.db", 
+                         "org.Mm.eg.db", "org.Rn.eg.db"))
+   
+  install.packages(c("data.table", "readxl", "stringr", "ggplot2", "ggrepel", 
+                     "ggfortify", "ggprism", "pheatmap", "VennDiagram", 
+                     "corrplot", "Hmisc", "stats", "tidyverse"))
+```
+   
+##Load installed packages
+
+```{r load packages, echo=FALSE}
+  library(data.table)
+  library(edgeR)
+  library(limma)
+  library(ggplot2)
+  library(ggrepel)
+  library(ggfortify)
+  library(stats)
+  library(sva)
+```
+
+##Set working directory
+```{r set working directory, echo=FALSE}
+  setwd("C:\\Users\\Maile Hollinger\\OneDrive\\Desktop\\BMDC RNA-seq")
+```
+
+##Read raw count data
+```{r raw count read, echo=FALSE}
+count_tbl <- fread("PBS_EPS_genecount.txt", data.table = FALSE)
+```
+
+##Read gene annotation table
+```{r gene annotation table, echo=FALSE}
+annot_tbl <- fread("gene_annotation.txt", data.table = FALSE)
+rownames(annot_tbl) <-annot_tbl[[1]]
+```
+
+##Set row names to gene ID
+```{r gene ID trim, echo=FALSE}
+rownames(count_tbl) <- count_tbl[[1]]
+count_tbl_trim <- count_tbl[, -c(1)]
+```
+
+##Filter out low-expressed genes
+```{r filter low expression, echo=FALSE}
+perc_keep <- 0.8
+gene_keep <- rowSums(count_tbl_trim > 0) >= ceiling(perc_keep * ncol(count_tbl_trim))
+count_tbl_low_rm <- count_tbl_trim[gene_keep, ]
+```
+
+##Update annotation table
+```{r update annotation table}
+annot_tbl <- annot_tbl[rownames(count_tbl_low_rm), ]
+```
+
+##Generate metadata table
+```{r metadata}
+meta <- data.frame(SampleID = colnames(count_tbl_trim),
+                   Treatment = c("PBS", "PBS", "EPS", "EPS", "EPS"))
+rownames(meta) <- meta$SampleID
+```
+
+##Create a DGE list with the annotation table included
+```{r DGE list}
+dge <- DGEList(counts=count_tbl_low_rm, genes = annot_tbl$gene_name, samples = meta$Sample_ID)
+dge_v <- DGEList(counts = count_tbl_low_rm, genes = annot_tbl$gene_name, samples = meta)
+```
+
+##Normalize counts
+```{r normalize counts}
+dge <- calcNormFactors(dge, method = "TMM")
+dge_v <- voom(dge, plot=TRUE)
+# save the dge_v object for later use
+saveRDS(dge_v, "dge_v.rds")
+```
+##Generate PCA plot; needs to be debugged to get colors
+```{r PCA}
+shape_column <- "Treatment"
+color_column <- "Treatment"
+label <- TRUE
+label_size <- 4
+plot_save_name <- "PCA_Plot.pdf"
+
+meta_table <- dge_v$targets
+count_table_t <- as.data.frame(t(dge_v$E))
+pca_prep <- prcomp(count_table_t, scale. = TRUE)
+ 
+pca_plot <- autoplot(
+  pca_prep, 
+  data = meta_table, 
+  mapping = aes(
+    colour = .data[[color_column]], 
+    shape = .data[[shape_column]]
+    )
+  ) +
+  scale_colour_discrete() +
+  scale_shape_discrete() +
+  geom_text_repel(aes(label = rownames(meta_table)), size = label_size) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        panel.grid.minor.y=element_blank(),
+        panel.grid.major.y=element_blank())
+ 
+ggsave(plot_save_name, device = "pdf", units = "cm", width = 16, height = 14)
+```
+
+##Differential expression analysis
+```{r DEG analysis}
+comparison <- "EPS-PBS"
+ 
+design <- model.matrix(~ 0 + dge_v$targets[["Treatment"]])
+colnames(design) <- gsub(".*]]", "", colnames(design))
+ 
+contrast_matrix <- makeContrasts(contrasts = comparison, levels = design)
+ 
+fit <- lmFit(dge_v, design)
+fit_2 <- contrasts.fit(fit, contrast_matrix)
+fit_2 <- eBayes(fit_2)
+ 
+deg_tbl <- topTable(fit_2, coef = colnames(contrast_matrix), n = Inf, p.value=1, lfc=0, sort.by = "p")
+fwrite(deg_tbl, "DEG_EPSvsPBS.tsv", sep = "\t", row.names = T)
+```
